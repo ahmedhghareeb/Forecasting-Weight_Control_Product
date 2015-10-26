@@ -1,0 +1,580 @@
+-----------------------------------------------------------------------------
+Time Series Final Project - Advertising & Sales - regression w/ ARIMA errors
+-----------------------------------------------------------------------------
+
+Load required library:
+```{r, warning=FALSE, message=FALSE, results='hide'}
+library(xts)
+library(PerformanceAnalytics)
+library(forecast)
+library(tseries)
+library(astsa)
+library(fracdiff)
+```
+
+- Read in data:
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+
+str(data)
+head(data)
+
+attach(data)
+```
+
+- Plot time series:
+```{r}
+plot(ts(data, start=c(2001,1), frequency=12), main="Consecutive monthly sales and advertising expenditures \n of a dietary weight control product in 2001-2003")
+
+plot(Sales ~ Advertising, data, main="Scatter plot for consecutive monthly sales and advertising \n expenditures of a dietary weight control product in 2001-2003", xlab="Sales", ylab="Advertising Cost")
+
+linear.model=lm(Sales~Advertising, data=data)
+abline(linear.model,col="red")
+cor(Sales, Advertising)
+```
+The correlation coefficient between sales and acvertising is 0.63.
+
+
+- Plot the actual and fitted values using linear.model:
+```{r}
+ts.plot(ts(data$Sales, start=c(2001,1), frequency=12), ylab="Sales")
+
+lines(ts(linear.model$fitted.values, start=c(2001,1), frequency=12), col="red")
+legend("topleft",
+       legend=c("actual values","fitted values"),
+       col=c("black","red"),lwd=1,bty='n')
+```
+
+- Residual analysis of linear.model:
+```{r}
+tsdisplay(residuals(linear.model))
+
+# residual Q-Q plot
+qqnorm(residuals(linear.model))
+qqline(residuals(linear.model))
+
+# Ljung-Box test for the residuals
+Box.test(residuals(linear.model),fitdf=2,lag=20,type="Ljung")
+```
+
+
+
+```{r}
+# define max and min functions that allows 0<= {p,q} <=5
+check.max=function(x) {
+    y = x + 2
+    if (y >= 5) {
+        return(5)
+    } else {
+        return(y)
+    }
+}
+
+check.min=function(x) {
+    y = x - 2
+    if (y < 0) {
+        return(0)
+    } else {
+        return(y)
+    }
+}
+```
+
+
+
+#
+- Model 1 with ARIMA errors:
+```{r}
+# regression
+reg0=lm(Sales~Advertising, data=data)
+summary(reg0)
+
+# regression w/ arma errors
+reg1=auto.arima(data[,2], xreg=c(data[,1]), seasonal=TRUE)
+summary(reg1)
+
+# optimizing the parameters from the auto.arima output
+# find ARIMA for residuals from reg4 
+p.max=check.max(arimaorder(reg1)[1])
+p.min=check.min(arimaorder(reg1)[1])
+q.max=check.max(arimaorder(reg1)[3])
+q.min=check.min(arimaorder(reg1)[3])
+d=arimaorder(reg1)[2]
+
+tmp.ts=data[,2]
+tmp.aicc=Inf
+tmp.bic=Inf
+tmp.order=as.integer(c(0,0,0))
+
+table2=matrix(0,(p.max-p.min+1)*(q.max-q.min+1),4)
+
+n=1
+for (i in p.min:p.max) {
+    for (j in q.min:q.max) {
+            
+        #print(paste0(j,i,k))
+        mod=Arima(tmp.ts, order=c(i,d,j), xreg=c(data[,1]), method="ML", include.mean=FALSE)
+            
+        npar=length(mod$coef) + 1
+        nstar=length(mod$residuals)-mod$arma[6]-mod$arma[7]*mod$arma[5]
+        bic=AIC(mod,k=log(length(tmp.ts)))
+        aicc=mod$aic + 2*npar*(nstar/(nstar - npar - 1) - 1)
+        mse=mean((forecast(mod,12,xreg=data[,1])$mean - data[,2])^2)
+            
+        table2[n,1]=paste0("ARIMA(",i,",",d,",",j,")")
+        table2[n,2]=round(aicc,3)
+        table2[n,3]=round(bic,3)
+        table2[n,4]=round(mse,3)
+        n=n+1
+    }
+}
+
+table2=data.frame(table2)
+table2=table2[order(table2[,4]),]
+colnames(table2)=c("ARIMA model","AICc","BIC","MSE")
+table2
+```
+
+
+- Model 1 w/ ARIMA(0,1,1) errors: (Model 3)
+```{r}
+# reg w/ ARIMA(0,1,1) errors
+model3=Arima(data[,2], order=c(0,1,1), xreg=c(data[,1]), method="ML", include.mean=FALSE)
+summary(model3)
+
+# ACF PACF
+tsdisplay(residuals(model3))
+
+# Ljung-Box test for the residuals
+Box.test(model3$residuals,fitdf=4,lag=20,type="Ljung")
+
+# Durbin-Watson test
+durbinWatsonTest(as.vector(model3$residuals), alternative=c("two.sided"))
+
+# Forecast
+## actual values
+ts.plot(ts(data$Sales, start=c(1980,1), frequency=12), ylab="Sales", type="b", ylim=c(0,90))
+
+## fitted values using model3
+lines(ts(fitted(model3), start=c(1980,1), frequency=12), col="orange", lwd=2)
+
+## fitted values using Model 1 (lm)
+linear.model=lm(Sales ~ Advertising, data)
+lines(ts(linear.model$fitted.values, start=c(1980,1), frequency=12), col="red", lwd=2)
+
+legend("topleft",
+       legend=c("actual values","fitted values with Model 3", "fitted values with Model 1"),
+       col=c("black","orange","red"),lwd=1,bty='n',cex=0.7)
+
+
+## TS-CV for Model 3
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae3 <- matrix(NA,n-k,12)
+
+tmp.data=ts(data, start=c(1980,1), frequency=12)
+st = tsp(tmp.data)[1]+(k-2)/12
+
+for(i in 1:(n-k))
+{
+  #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+  xshort <- window(tmp.data, end=st+i/12)
+  xnext  <- window(tmp.data, start=st+(i+1)/12, end=st+(i+12)/12)
+  xlong  <- window(tmp.data, end=st+(i+12)/12)
+  
+  # Model 1 w/ ARIMA(0,1,1) errors
+  fit1   <- Arima(xshort[,2], order=c(0,1,1), xreg=c(xshort[,1]), method="ML", include.mean=FALSE)
+  fcast1 <- forecast(fit1, nrow(xnext), xreg=xnext[,1])$mean
+    
+  mae3[i,1:nrow(xnext)] <- abs(fcast1-xnext[,2])
+}
+
+plot(1:12, sqrt(colMeans(mae1^2,na.rm=TRUE)), type="l", col=2, xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,25))
+lines(1:12, sqrt(colMeans(mae1.rf^2,na.rm=TRUE)), type="o", lty=2, col="red")
+lines(1:12, sqrt(colMeans(mae2^2,na.rm=TRUE)), type="l", col="blue")
+lines(1:12, sqrt(colMeans(mae2.rf^2,na.rm=TRUE)), type="o", lty=2, col="blue")
+lines(1:12, sqrt(colMeans(mae3^2,na.rm=TRUE)), type="l", col="orange", lwd=2)
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model3 (Model 1 w/ ARIMA(0,1,1) errors)"), col=c("red","red","blue","blue","orange"), lty=1, cex=0.7, bty="n")
+
+
+```
+
+
+- Model 2 with ARIMA error: 
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+data$Month=rep(1:12,3)
+
+# regression
+model2=glm(Sales ~ Advertising + factor(Month), data=data)
+summary(model2)
+
+# regression w/ arma errors
+model4=auto.arima(data[,2], xreg=cbind(data[,1], factor(data[,3])), seasonal=TRUE)
+summary(model4)
+
+# optimizing the parameters from the auto.arima output
+# find ARIMA for residuals from reg4 
+p.max=check.max(arimaorder(model4)[1])
+p.min=check.min(arimaorder(model4)[1])
+q.max=check.max(arimaorder(model4)[3])
+q.min=check.min(arimaorder(model4)[3])
+d=arimaorder(model4)[2]
+
+tmp.ts=data[,2]
+tmp.aicc=Inf
+tmp.bic=Inf
+tmp.order=as.integer(c(0,0,0))
+
+table4=matrix(0,(p.max-p.min+1)*(q.max-q.min+1),4)
+
+n=1
+for (i in p.min:p.max) {
+    for (j in q.min:q.max) {
+            
+        #print(paste0(j,i,k))
+        mod=Arima(tmp.ts, order=c(i,d,j), xreg=cbind(data[,1], factor(data[,3])), 
+                  method="ML", include.mean=FALSE)
+            
+        npar=length(mod$coef) + 1
+        nstar=length(mod$residuals)-mod$arma[6]-mod$arma[7]*mod$arma[5]
+        bic=AIC(mod,k=log(length(tmp.ts)))
+        aicc=mod$aic + 2*npar*(nstar/(nstar - npar - 1) - 1)
+        mse=mean((forecast(mod,12,xreg=cbind(data[,1], factor(data[,3])))$mean - data[,2])^2)
+            
+        table4[n,1]=paste0("ARIMA(",i,",",d,",",j,")")
+        table4[n,2]=round(aicc,3)
+        table4[n,3]=round(bic,3)
+        table4[n,4]=round(mse,3)
+        n=n+1
+    }
+}
+
+table4=data.frame(table4)
+table4=table4[order(table4[,4]),]
+colnames(table4)=c("ARIMA model","AICc","BIC","MSE")
+table4
+
+```
+
+
+- Model4.202: Model 2 w/ ARIMA(2,0,2) errors:
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+data$Month=rep(1:12,3)
+
+data=ts(data, start=c(1980,1), frequency=12)
+
+model4.202=Arima(data[,2], order=c(2,0,2), xreg=cbind(data[,1], factor(data[,3])), method="ML", include.mean=FALSE)
+summary(model4.202)
+
+# ACF PACF
+tsdisplay(residuals(model4.202))
+
+# Ljung-Box test for the residuals
+Box.test(residuals(model4.202),fitdf=6,lag=20,type="Ljung")
+
+# Durbin-Watson test
+durbinWatsonTest(as.vector(residuals(model4.202)), alternative=c("two.sided"))
+
+
+# Forecast
+## actual values
+ts.plot(ts(data[,2], start=c(1980,1), frequency=12), ylab="Sales", type="b", ylim=c(0,90))
+
+## fitted values using Model2 w/ ARIMA(2,0,2) errors
+lines(ts(fitted(model4.202), start=c(1980,1), frequency=12), col="magenta", lwd=2)
+
+## fitted values using Model 2 (glm)
+model2=glm(Sales ~ Advertising + factor(Month), data=data)
+lines(ts(model2$fitted.values, start=c(1980,1), frequency=12), col="blue", lwd=2)
+
+legend("topleft",
+       legend=c("actual values","fitted values with Model 2", "fitted values with Model 2 with ARIMA(2,0,2) errors"),
+       col=c("black","blue","magenta"),lwd=1,bty='n',cex=0.7)
+
+
+## TS-CV for Model4.202
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae4.202 <- matrix(NA,n-k,12)
+
+tmp.data=ts(data, start=c(1980,1), frequency=12)
+st = tsp(tmp.data)[1]+(k-2)/12
+
+for(i in 1:(n-k))
+{
+  #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+  xshort <- window(tmp.data, end=st+i/12)
+  xnext  <- window(tmp.data, start=st+(i+1)/12, end=st+(i+12)/12)
+  xlong  <- window(tmp.data, end=st+(i+12)/12)
+  
+  # Model 1 w/ ARIMA(0,1,1) errors
+  fit1   <- Arima(xshort[,2], order=c(2,0,2), xreg=cbind(xshort[,1], factor(xshort[,3])), method="ML", include.mean=FALSE)
+  fcast1 <- forecast(fit1, nrow(xnext), xreg=cbind(xnext[,1], factor(xnext[,3])))$mean
+    
+  mae4.202[i,1:nrow(xnext)] <- abs(fcast1-xnext[,2])
+}
+
+plot(1:12, sqrt(colMeans(mae1^2,na.rm=TRUE)), type="l", col=2, xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,30))
+lines(1:12, sqrt(colMeans(mae1.rf^2,na.rm=TRUE)), type="o", lty=2, col="red")
+lines(1:12, sqrt(colMeans(mae2^2,na.rm=TRUE)), type="l", col="blue")
+lines(1:12, sqrt(colMeans(mae2.rf^2,na.rm=TRUE)), type="o", lty=2, col="blue")
+lines(1:12, sqrt(colMeans(mae3^2,na.rm=TRUE)), type="l", col="orange", lwd=2)
+lines(1:12, sqrt(colMeans(mae4.202^2,na.rm=TRUE)), type="l", col="magenta", lwd=2)
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(2,0,2) error)"), col=c("red","red","blue","blue","orange","magenta"), lty=1, cex=0.6, bty="n")
+
+
+```
+
+
+- Model4.000: Model 2 w/ ARIMA(0,0,0) errors:
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+data$Month=rep(1:12,3)
+
+data=ts(data, start=c(1980,1), frequency=12)
+
+model4.000=Arima(data[,2], order=c(0,0,0), xreg=cbind(data[,1], factor(data[,3])), method="ML", include.mean=FALSE)
+summary(model4.000)
+
+# ACF PACF
+tsdisplay(residuals(model4.000))
+
+# Ljung-Box test for the residuals
+Box.test(residuals(model4.000),fitdf=3,lag=20,type="Ljung")
+
+# Durbin-Watson test
+durbinWatsonTest(as.vector(residuals(model4.000)), alternative=c("two.sided"))
+
+
+# Forecast
+## actual values
+ts.plot(ts(data[,2], start=c(1980,1), frequency=12), ylab="Sales", type="b", ylim=c(0,90))
+
+## fitted values using Model2 w/ ARIMA(0,0,0) errors
+lines(ts(fitted(model4.000), start=c(1980,1), frequency=12), col="green", lwd=2)
+
+## fitted values using Model 2 (glm)
+lines(ts(linear.model.glm$fitted.values, start=c(1980,1), frequency=12), col="blue", lwd=2)
+
+legend("topleft",
+       legend=c("actual values","fitted values with Model 2", "fitted values with Model 2 with ARIMA(0,0,0) errors"), col=c("black","blue","green"),lwd=1,bty='n',cex=0.7)
+
+
+## TS-CV for Model4.000
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae4.000 <- matrix(NA,n-k,12)
+
+tmp.data=ts(data, start=c(1980,1), frequency=12)
+st = tsp(tmp.data)[1]+(k-2)/12
+
+for(i in 1:(n-k))
+{
+  #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+  xshort <- window(tmp.data, end=st+i/12)
+  xnext  <- window(tmp.data, start=st+(i+1)/12, end=st+(i+12)/12)
+  xlong  <- window(tmp.data, end=st+(i+12)/12)
+  
+  # Model 1 w/ ARIMA(0,1,1) errors
+  fit1   <- Arima(xshort[,2], order=c(0,0,0), xreg=cbind(xshort[,1], factor(xshort[,3])), method="ML", include.mean=FALSE)
+  fcast1 <- forecast(fit1, nrow(xnext), xreg=cbind(xnext[,1], factor(xnext[,3])))$mean
+    
+  mae4.000[i,1:nrow(xnext)] <- abs(fcast1-xnext[,2])
+}
+
+plot(1:12, sqrt(colMeans(mae1^2,na.rm=TRUE)), type="l", col=2, xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,30))
+lines(1:12, sqrt(colMeans(mae1.rf^2,na.rm=TRUE)), type="o", lty=2, col="red")
+lines(1:12, sqrt(colMeans(mae2^2,na.rm=TRUE)), type="l", col="blue")
+lines(1:12, sqrt(colMeans(mae2.rf^2,na.rm=TRUE)), type="o", lty=2, col="blue")
+lines(1:12, sqrt(colMeans(mae3^2,na.rm=TRUE)), type="l", col="orange", lwd=2)
+#lines(1:12, sqrt(colMeans(mae4.202^2,na.rm=TRUE)), type="l", col="magenta", lwd=2)
+lines(1:12, sqrt(colMeans(mae4.000^2,na.rm=TRUE)), type="l", col="green", lwd=3)
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(0,0,0) error)"), col=c("red","red","blue","blue","orange","green"), lty=1, cex=0.6, bty="n")
+
+
+
+
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(2,0,2) error)"), col=c("red","red","blue","blue","orange","magenta"), lty=1, cex=0.6, bty="n")
+
+
+
+```
+
+
+- SVM:
+```{r}
+library(e1071)
+
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+data$Month=rep(1:12,3)
+
+data=ts(data, start=c(1980,1), frequency=12)
+
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae7.svm <- matrix(NA,n-k,12)
+
+tmp.data=ts(data, start=c(1980,1), frequency=12)
+st = tsp(tmp.data)[1]+(k-2)/12
+
+for(i in 1:(n-k))
+{
+  #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+  xshort <- window(tmp.data, end=st+i/12)
+  xnext  <- window(tmp.data, start=st+(i+1)/12, end=st+(i+12)/12)
+  xlong  <- window(tmp.data, end=st+(i+12)/12)
+  
+  # Model 1 w/ ARIMA(0,1,1) errors
+  fit1   <- svm(Sales ~ Advertising,data=xshort)
+  fcast1 <- predict(fit1 ,newdata=xnext)
+    
+  mae7.svm[i,1:nrow(xnext)] <- sqrt(mean((fcast1-xnext[,2])^2))
+}
+
+
+
+
+plot(1:12, colMeans(mae1,na.rm=TRUE), type="l", col="red", xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,30), lwd=2)
+lines(1:12, colMeans(mae1.rf,na.rm=TRUE), type="o", lty=2, col="red")
+lines(1:12, colMeans(mae2,na.rm=TRUE), type="l", col="blue")
+lines(1:12, colMeans(mae2.rf,na.rm=TRUE), type="o", lty=2, col="blue")
+lines(1:12, colMeans(mae3,na.rm=TRUE), type="l", col="orange", lwd=1)
+lines(1:12, colMeans(mae4.202,na.rm=TRUE), type="l", col="magenta", lwd=3)
+lines(1:12, colMeans(mae4.000,na.rm=TRUE), type="l", col="green", lwd=3)
+lines(1:12, colMeans(mae7.svm,na.rm=TRUE), type="l", col="darkgray", lwd=3)
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(2,0,2) error)","Model 4 (Model 2 w/ ARIMA(0,0,0) error)"), col=c("red","red","blue","blue","orange","magenta","green"), lty=1, cex=0.6, bty="n")
+
+```
+
+
+
+- CV-TS: B
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=ts(data[,-1], start=c(2001,1), frequency=12)
+
+k = 18 # minimum data length for fitting a model
+n = length(data)
+mae1 <- mae2 <- mae3 <- mae4 <- matrix(NA,n-k,12)
+st = tsp(data)[1]+(k-2)/12
+
+for(i in 1:(n-k))
+{
+  #xshort <- window(a10, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+  xshort <- window(data, end=st + i/12)
+  xnext <- window(data, start=st + (i+1)/12, end=st + (i+12)/12)
+  xlong <- window(data, end=st + (i+12)/12)
+  
+  # Regression w/ ARIMA(0,0,0)(1,0,0)[6]
+  fit1 <- Arima(xshort[,2], order=c(0,0,0), seasonal=list(order=c(1,0,0), period=6), xreg=c(xshort[,1]), method="ML")
+  fit1a <- Arima(xlong[,2], model=fit1, xreg=c(xlong[,1]))
+  fcast1 <- fitted(fit1a)[-(1:length(xshort[,2]))]
+  
+  # Regression w/ ARIMA(0,2,2)(1,0,0)[6]
+  fit2 <- Arima(xshort[,2], order=c(0,2,2), seasonal=list(order=c(1,0,0), period=6), xreg=c(xshort[,1]), method="ML")
+  fit2a <- Arima(xlong[,2], model=fit2, xreg=c(xlong[,1]))
+  fcast2 <- fitted(fit2a)[-(1:length(xshort[,2]))]
+
+  # Regression w/ ARIMA(0,0,0)(0,0,1)[4]
+  fit3 <- Arima(xshort[,2], order=c(0,0,0), seasonal=list(order=c(0,0,1), period=4), xreg=c(xshort[,1]), method="ML")
+  fit3a <- Arima(xlong[,2], model=fit3, xreg=c(xlong[,1]))
+  fcast3 <- fitted(fit3a)[-(1:length(xshort[,2]))]
+
+  # Regression w/ ARIMA(0,0,0)(0,0,1)[4]
+  fit4 <- Arima(xshort[,2], order=c(0,2,2), seasonal=list(order=c(0,0,1), period=4), xreg=c(xshort[,1]), method="ML")
+  fit4a <- Arima(xlong[,2], model=fit4, xreg=c(xlong[,1]))
+  fcast4 <- fitted(fit4a)[-(1:length(xshort[,2]))]
+  
+  mae1[i,1:length(xnext[,2])] <- abs(fcast1-xnext[,2])
+  mae2[i,1:length(xnext[,2])] <- abs(fcast2-xnext[,2])
+  mae3[i,1:length(xnext[,2])] <- abs(fcast3-xnext[,2])
+  mae4[i,1:length(xnext[,2])] <- abs(fcast4-xnext[,2])
+}
+
+plot(1:12, colMeans(mae1,na.rm=TRUE), type="l", col=2, xlab="horizon", ylab="MAE", ylim=c(5,45))
+lines(1:12, colMeans(mae2,na.rm=TRUE), type="l",col=3)
+lines(1:12, colMeans(mae3,na.rm=TRUE), type="l",col=4)
+lines(1:12, colMeans(mae4,na.rm=TRUE), type="l",col=5)
+legend("topleft",legend=c("reg w/ ARIMA(0,0,0)(1,0,0)[6]","reg w/ ARIMA(0,2,2)(1,0,0)[6]","reg w/ ARIMA(0,0,0)(0,0,1)[4]","reg w/ ARIMA(0,2,2)(0,0,1)[4]"),col=2:5,lty=1, cex=0.7)
+
+```
+
+
+
+
+
+- Cross Validation:
+```{r}
+library(parallel)
+library(doParallel)
+
+cv.ts = function(x, FUN, myControl, ...) {
+    stepSize = myControl$stepSize
+    maxHorizon = myControl$maxHorizon
+    minObs = myControl$minObs
+    fixedWindow = myControl$fixedWindow
+
+    freq = frequency(x)
+    n = length(x)
+    
+    st = tsp(x)[1]+(minObs-2)/freq   #tsp(x)[1]+(minObs-2)/freq
+    steps = seq(1,(n-minObs),by=stepSize)
+    
+    cl = makeCluster( detectCores()-1 )
+    registerDoParallel(cl) # register foreach backend
+
+    forcasts = foreach(i=steps, .multicombine=FALSE) %dopar% {
+        if (fixedWindow) {
+            training.window = window(x, start=st+(i-minObs)/freq, end=st+i/freq)
+        } else {
+            training.window = window(x, end=st+i/freq)
+        }
+        
+        return(FUN(training.window, h=maxHorizon, ...))
+        
+    }
+        stopCluster(cl)
+        return(forcasts)
+}
+
+arimaForecast = function(x, h, order=c(1,0,0), seasonal=c(1,0,0), ...) {
+    
+    library(forecast)
+    fit = Arima(x, order=order, seasonal=seasonal, method="ML")
+    
+    forecast(fit, h=h)
+}
+
+
+ts.Data=ts(data[,2], start=c(2001,1), frequency=6)
+training.data=data[1:24,2]
+testing.data=data[25:36,2]
+
+myControl=list(minObs=12, stepSize=1, maxHorizon=12, fixedWindow=TRUE)
+temp=ts(training.data,start=c(2001,1), frequency=6) 
+zzz.list = cv.ts(x=temp, FUN=arimaForecast, myControl)
+
+plot(zzz.list[[length(zzz.list)]],include=2*12)
+lines(ts.Data[,2], col="black")
+
+# class(zzz.list[[length(zzz.list)]])
+# names(zzz.list[[length(zzz.list)]])
+# names(zzz.list[[length(zzz.list)]]$model)
+
+```
+

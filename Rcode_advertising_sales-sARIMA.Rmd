@@ -1,0 +1,156 @@
+Load required library:
+```{r, warning=FALSE, message=FALSE, results='hide'}
+library(xts)
+library(PerformanceAnalytics)
+library(forecast)
+library(tseries)
+library(astsa)
+library(fracdiff)
+```
+
+- Read in data:
+```{r}
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+
+str(data)
+head(data)
+
+attach(data)
+```
+
+- Seasonal Decomposition:
+```{r}
+ts.Data=ts(data, start=c(1980,1), frequency=12)
+
+SeasonDecomp=stl(ts.Data[,2], t.window=15, s.window="periodic", robust=TRUE)
+plot(SeasonDecomp)
+```
+
+- Model 5: sARIMA
+```{r}
+data4=ts(data[,2], start=c(1980,1), frequency=4)
+model5.4=Arima(data4, order=c(3,0,0), method="ML")
+
+data5=ts(data[,2], start=c(1980,1), frequency=5)
+model5.5=Arima(data5, order=c(3,0,2), seasonal=list(order=c(0,1,0), period=5), method="ML")
+
+data6=ts(data[,2], start=c(1980,1), frequency=6)
+model5.6=Arima(data6, order=c(0,0,1), seasonal=list(order=c(1,0,0), period=6), method="ML")
+
+
+## ACF PACF
+tsdisplay(residuals(model5.4))
+tsdisplay(residuals(model5.5), main="residuals from sARIMA(3,0,2)(0,1,0)[5]")
+tsdisplay(residuals(model5.6), main="residuals from sARIMA(0,0,1)(1,0,0)[6]")
+
+## Q-Q plots
+qqnorm(residuals(model5.4), main="sARIMA(3,0,0)[4]")
+qqline(residuals(model5.4))
+
+qqnorm(residuals(model5.5), main="sARIMA(3,0,2)(0,1,0)[5]")
+qqline(residuals(model5.5))
+
+qqnorm(residuals(model5.6), main="sARIMA(0,0,1)(1,0,0)[6]")
+qqline(residuals(model5.6))
+
+
+## Ljung-Box test for the residuals
+Box.test(residuals(model5.4),fitdf=3,lag=20,type="Ljung")
+Box.test(residuals(model5.5),fitdf=6,lag=20,type="Ljung")
+Box.test(residuals(model5.6),fitdf=2,lag=20,type="Ljung")
+
+# Durbin-Watson test
+durbinWatsonTest(as.vector(residuals(model5.4)), alternative=c("two.sided"))
+durbinWatsonTest(as.vector(residuals(model5.5)), alternative=c("two.sided"))
+durbinWatsonTest(as.vector(residuals(model5.6)), alternative=c("two.sided"))
+
+
+## Forecast
+# actual values
+ts.plot(ts(data[,2], start=c(1980,1), frequency=12), 
+        type="l", col=c("black"), lwd=c(1), ylab="Sales", ylim=c(0,90))
+lines(ts(fitted(model5.5), start=c(1980,1), frequency=12), type="l", col=c("green"), lwd=c(2))
+lines(ts(fitted(model5.6), start=c(1980,1), frequency=12), type="l", col=c("blue"), lwd=c(2))
+
+legend("topleft", 
+       legend=c("actual values","fitted values using Model 5 (sARIMA(3,0,2)(0,1,0)[5])", "fitted values using Model 6 (sARIMA(0,0,1)(1,0,0)[6])"),
+       col=c("black","green","blue"),lwd=1,bty='n',cex=0.7)
+
+
+## TS-CV for model5
+data=read.csv("D:/Pinsker/MSCA/Time_Series/Project/advertising-and-sales-data.csv")
+data=data[,2:3]
+
+freq=5
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae5 <- matrix(NA,n-k,12)
+    
+tmp.data=ts(data, start=1, frequency=freq)
+st = tsp(tmp.data)[1]+(k-2)/freq
+    
+for(i in 1:(n-k)) {
+    #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+    xshort <- window(tmp.data, end=st+i/freq)
+    xnext  <- window(tmp.data, start=st+(i+1)/freq, end=st+(i+12)/freq)
+    xlong  <- window(tmp.data, end=st+(i+12)/freq)
+  
+    fit1 <- Arima(xshort[,2], order=c(3,0,2), seasonal=c(0,1,0), method="ML")
+    fit1a <- Arima(xlong[,2], model=fit1, xreg=c(xlong[,1]))
+    fcast1 <- forecast(fit1, nrow(xnext))$mean
+    
+    mae5[i,1:nrow(xnext)] <- abs(fcast1-xnext[,2])
+}
+
+plot(1:12, sqrt(colMeans(mae1^2,na.rm=TRUE)), type="l", col=2, xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,50))
+lines(1:12, sqrt(colMeans(mae1.rf^2,na.rm=TRUE)), type="o", lty=2, col="red")
+lines(1:12, sqrt(colMeans(mae2^2,na.rm=TRUE)), type="l", col="blue")
+lines(1:12, sqrt(colMeans(mae2.rf^2,na.rm=TRUE)), type="o", lty=2, col="blue")
+lines(1:12, sqrt(colMeans(mae3^2,na.rm=TRUE)), type="l", col="orange", lwd=2)
+lines(1:12, sqrt(colMeans(mae4.000^2,na.rm=TRUE)), type="l", col="green", lwd=1)
+lines(1:12, sqrt(colMeans(mae5^2,na.rm=TRUE)), type="o", lty=2, col="darkgreen", lwd=2)
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(0,0,0) error)","Model 5: sARIMA(3,0,2)(0,1,0)[5]"), col=c("red","red","blue","blue","orange","green","darkgreen"), lty=1, cex=0.6, bty="n")
+
+
+
+
+## TS-CV for model6
+freq=6
+k = 18 # minimum data length for fitting a model
+n = nrow(data)
+mae6 <- matrix(NA,n-k,12)
+    
+tmp.data=ts(data, start=1, frequency=freq)
+st = tsp(tmp.data)[1]+(k-2)/freq
+    
+for(i in 1:(n-k)) {
+    #xshort <- window(data, start=st+(i-k+1)/12, end=st+i/12) # fixed window
+    xshort <- window(tmp.data, end=st+i/freq)
+    xnext  <- window(tmp.data, start=st+(i+1)/freq, end=st+(i+12)/freq)
+    xlong  <- window(tmp.data, end=st+(i+12)/freq)
+  
+    fit1 <- Arima(xshort[,2], order=c(0,0,1), seasonal=c(1,0,0), method="ML")
+    fit1a <- Arima(xlong[,2], model=fit1, xreg=c(xlong[,1]))
+    fcast1 <- forecast(fit1, nrow(xnext))$mean
+    
+    mae6[i,1:nrow(xnext)] <- abs(fcast1-xnext[,2])
+}
+
+
+plot(1:12, sqrt(colMeans(mae1^2,na.rm=TRUE)), type="l", col=2, xlab="horizon", ylab="RMSE of Forecasting", ylim=c(15,50))
+lines(1:12, sqrt(colMeans(mae1.rf^2,na.rm=TRUE)), type="o", lty=2, col="red")
+lines(1:12, sqrt(colMeans(mae2^2,na.rm=TRUE)), type="l", col="blue")
+lines(1:12, sqrt(colMeans(mae2.rf^2,na.rm=TRUE)), type="o", lty=2, col="blue")
+lines(1:12, sqrt(colMeans(mae3^2,na.rm=TRUE)), type="l", col="orange", lwd=2)
+lines(1:12, sqrt(colMeans(mae4.000^2,na.rm=TRUE)), type="l", col="green", lwd=1)
+lines(1:12, sqrt(colMeans(mae5^2,na.rm=TRUE)), type="o", lty=2, col="darkgreen", lwd=2)
+lines(1:12, sqrt(colMeans(mae6^2,na.rm=TRUE)), type="o", lty=3, col="purple", lwd=2)
+
+
+legend("topleft",legend=c("Model 1","Model 1 (using Random Forest, ntree=500)","Model 2","Model 2 (using Random Forest)","Model 3 (Model 1 w/ ARIMA(0,1,1) error)","Model 4 (Model 2 w/ ARIMA(0,0,0) error)","Model 5: sARIMA(3,0,2)(0,1,0)[5]","Model 6: sARIMA(0,0,1)(1,0,0)[6]"), col=c("red","red","blue","blue","orange","magenta","green","darkgreen","purple"), lty=1, cex=0.6, bty="n")
+
+```
+
+
